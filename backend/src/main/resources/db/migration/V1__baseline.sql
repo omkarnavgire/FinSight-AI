@@ -1,0 +1,4 @@
+-- V1__baseline.sql
+-- Empty schema marker. This migration records the Flyway baseline only.
+-- No application tables are created here.
+-- Each module creates its own tables in the migrations that follow (V2–V7).

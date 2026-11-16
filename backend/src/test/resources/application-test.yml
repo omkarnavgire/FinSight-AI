@@ -1,0 +1,27 @@
+# ---- Test profile overrides ----
+# Used by @SpringBootTest unit tests that do NOT use Testcontainers.
+spring:
+  datasource:
+    url: jdbc:h2:mem:finsight_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    database-platform: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false   # Flyway disabled for in-memory unit tests; Testcontainers ITs use real MySQL
+
+finsight:
+  security:
+    jwt:
+      secret: test-only-secret-must-be-at-least-64-characters-long-to-pass-validation-checks
+      access-expiry-ms: 900000
+      refresh-expiry-ms: 604800000
+    cookie:
+      secure: false
+  cors:
+    allowed-origins: http://localhost:5173

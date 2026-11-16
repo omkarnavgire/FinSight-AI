@@ -1,0 +1,66 @@
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.mvn/wrapper/maven-wrapper.jar
+hs_err_pid*
+replay_pid*
+
+# ---- Spring Boot ----
+# Profile YMLs are committed; they contain no secrets (secrets come from env vars).
+# Do NOT add application-*.yml here — those files must be version-controlled.
+# Only ignore a local override file:
+application-local.yml
+
+# ---- Environment / secrets ----
+.env
+.env.local
+.env.production
+*.secret
+
+# ---- IDE ----
+.idea/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ---- Node / frontend ----
+node_modules/
+dist/
+frontend/dist/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Logs ----
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- Test / coverage ----
+coverage/
+.nyc_output/
+
+# ---- Docker ----
+docker-compose.override.yml

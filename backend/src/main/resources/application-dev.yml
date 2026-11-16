@@ -1,0 +1,20 @@
+# ---- Dev profile overrides ----
+# Loaded alongside application.yml when spring.profiles.active=dev
+# DO NOT commit real secrets here.
+spring:
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+finsight:
+  security:
+    cookie:
+      # Secure=false allows HTTP-only local development without TLS
+      secure: false
+
+logging:
+  level:
+    com.finsight: DEBUG
+    org.flywaydb: DEBUG
