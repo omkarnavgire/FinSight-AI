@@ -15,9 +15,8 @@ CREATE TABLE users (
 
 CREATE TABLE refresh_tokens (
     id                 BIGINT         NOT NULL AUTO_INCREMENT,
-    -- Cross-module logical FK: refresh_tokens.user_id -> users.id
-    -- Enforced in auth module code; not declared as a DB FOREIGN KEY
-    -- because auth module owns both tables (same module, same migration).
+    -- Same-module FK: refresh_tokens.user_id -> users.id
+    -- Both tables are owned by the auth module; a real FOREIGN KEY constraint is declared below.
     user_id            BIGINT         NOT NULL,
     token_hash         VARCHAR(64)    NOT NULL COMMENT 'SHA-256 hex of raw 256-bit token; raw value never stored',
     expires_at         DATETIME       NOT NULL,
