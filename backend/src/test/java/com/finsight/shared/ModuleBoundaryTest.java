@@ -78,6 +78,26 @@ class ModuleBoundaryTest {
     }
 
     @Test
+    @DisplayName("No controller depends on any repository (coding standard: controllers delegate to services)")
+    void controllers_doNotUseRepositories() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("com.finsight..controller..")
+                .should().dependOnClassesThat()
+                .resideInAPackage("com.finsight..repository..");
+        rule.check(ALL_CLASSES);
+    }
+
+    @Test
+    @DisplayName("AccountService.applyDelta is only called from accounts or transactions.service (T-28b)")
+    void applyDelta_onlyCalledFromAllowedPackages() {
+        ArchRule rule = noClasses()
+                .that().resideOutsideOfPackages("com.finsight.accounts..", "com.finsight.transactions.service..")
+                .should().callMethod(com.finsight.accounts.service.AccountService.class,
+                        "applyDelta", Long.class, java.math.BigDecimal.class);
+        rule.check(ALL_CLASSES);
+    }
+
+    @Test
     @DisplayName("fraud module: no outside class imports fraud.repository")
     void fraudRepository_notAccessedFromOutsideFraudModule() {
         ArchRule rule = noClasses()

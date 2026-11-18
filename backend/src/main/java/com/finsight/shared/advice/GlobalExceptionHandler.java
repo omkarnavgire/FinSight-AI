@@ -1,6 +1,7 @@
 package com.finsight.shared.advice;
 
 import com.finsight.shared.exception.AuthenticationFailedException;
+import com.finsight.shared.exception.ConflictException;
 import com.finsight.shared.exception.InvalidTokenException;
 import com.finsight.shared.exception.NotFoundException;
 import com.finsight.shared.exception.RateLimitExceededException;
@@ -41,6 +42,19 @@ public class GlobalExceptionHandler {
         problem.setType(URI.create("https://finsight.com/errors/not-found"));
         problem.setTitle("Not Found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
+
+    /**
+     * Handles state conflicts (e.g. writing to a deactivated account) — returns 409.
+     */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ProblemDetail> handleConflict(
+            ConflictException ex, WebRequest request) {
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT, ex.getMessage());
+        problem.setType(URI.create("https://finsight.com/errors/conflict"));
+        problem.setTitle("Conflict");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
     }
 
     /**
