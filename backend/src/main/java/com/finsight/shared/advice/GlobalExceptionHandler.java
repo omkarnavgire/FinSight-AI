@@ -1,6 +1,7 @@
 package com.finsight.shared.advice;
 
 import com.finsight.shared.exception.AuthenticationFailedException;
+import com.finsight.shared.exception.BadRequestException;
 import com.finsight.shared.exception.ConflictException;
 import com.finsight.shared.exception.InvalidTokenException;
 import com.finsight.shared.exception.NotFoundException;
@@ -42,6 +43,19 @@ public class GlobalExceptionHandler {
         problem.setType(URI.create("https://finsight.com/errors/not-found"));
         problem.setTitle("Not Found");
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
+
+    /**
+     * Handles business-rule validation failures (e.g. unknown country code) — returns 400.
+     */
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<ProblemDetail> handleBadRequest(
+            BadRequestException ex, WebRequest request) {
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setType(URI.create("https://finsight.com/errors/bad-request"));
+        problem.setTitle("Bad Request");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problem);
     }
 
     /**

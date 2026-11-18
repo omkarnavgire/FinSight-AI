@@ -98,6 +98,17 @@ class ModuleBoundaryTest {
     }
 
     @Test
+    @DisplayName("transactions uses accounts only through accounts.service and accounts.dto")
+    void transactions_useAccountsOnlyThroughPublicApi() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("com.finsight.transactions..")
+                .should().dependOnClassesThat()
+                .resideInAnyPackage("com.finsight.accounts.domain..", "com.finsight.accounts.repository..",
+                        "com.finsight.accounts.controller..");
+        rule.check(ALL_CLASSES);
+    }
+
+    @Test
     @DisplayName("fraud module: no outside class imports fraud.repository")
     void fraudRepository_notAccessedFromOutsideFraudModule() {
         ArchRule rule = noClasses()
