@@ -14,12 +14,17 @@ import com.finsight.transactions.dto.CreateTransactionRequest;
 import com.finsight.transactions.dto.TransactionDto;
 import com.finsight.transactions.dto.TransactionFilter;
 import com.finsight.transactions.dto.UpdateTransactionRequest;
+import com.finsight.transactions.event.TransactionsChangedEvent;
+import com.finsight.transactions.event.TransactionsChangedEvent.CategoryPeriod;
 import com.finsight.transactions.repository.TransactionRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Set;
 
 /**
  * Transaction business logic (T-28).
@@ -52,13 +57,31 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final AccountService accountService;
     private final CategoryResolver categoryResolver;
+    private final ApplicationEventPublisher events;
 
+    /**
+     * Constructor without event publishing (events are discarded). Kept so existing unit tests
+     * construct the service unchanged; Spring uses the {@link Autowired} constructor below.
+     */
     public TransactionService(TransactionRepository transactionRepository,
                               AccountService accountService,
                               CategoryResolver categoryResolver) {
+        this(transactionRepository, accountService, categoryResolver, event -> { });
+    }
+
+    /**
+     * Spring constructor. {@code events} receives a {@link TransactionsChangedEvent} at the end of
+     * every create, update, delete and category override (Phase 6, budget alerts).
+     */
+    @Autowired
+    public TransactionService(TransactionRepository transactionRepository,
+                              AccountService accountService,
+                              CategoryResolver categoryResolver,
+                              ApplicationEventPublisher events) {
         this.transactionRepository = transactionRepository;
         this.accountService = accountService;
         this.categoryResolver = categoryResolver;
+        this.events = events;
     }
 
     /**
@@ -90,6 +113,8 @@ public class TransactionService {
         accountService.applyDelta(request.accountId(), request.amount());
 
         // Phase 9 (T-52/T-54): INSERT fraud alerts for the fired rules here, in this transaction.
+
+        publishChanged(Set.of(CategoryPeriod.of(category, request.transactionDate())));
         return result;
     }
 
@@ -115,11 +140,14 @@ public class TransactionService {
 
         var accountId = transaction.getAccountId();
         var delta = request.amount().subtract(transaction.getAmount());
+        var before = CategoryPeriod.of(transaction.getCategory(), transaction.getTransactionDate());
         transaction.edit(request.amount(), request.transactionDate(), request.category(), request.description());
         var result = TransactionDto.from(transaction);
 
         // Must stay last: flushes the edit above, then clears the persistence context.
         accountService.applyDelta(accountId, delta);
+
+        publishChanged(pairOf(before, CategoryPeriod.of(request.category(), request.transactionDate())));
         return result;
     }
 
@@ -138,10 +166,13 @@ public class TransactionService {
 
         var accountId = transaction.getAccountId();
         var reversal = transaction.getAmount().negate();
+        var removed = CategoryPeriod.of(transaction.getCategory(), transaction.getTransactionDate());
         transactionRepository.delete(transaction);
 
         // Must stay last: flushes the DELETE above, then clears the persistence context.
         accountService.applyDelta(accountId, reversal);
+
+        publishChanged(Set.of(removed));
     }
 
     /**
@@ -157,8 +188,12 @@ public class TransactionService {
     public TransactionDto overrideCategory(Long transactionId, Category category) {
         var transaction = transactionRepository.findByIdAndUserId(transactionId, SecurityUtils.currentUserId())
                 .orElseThrow(() -> new TransactionNotFoundException(transactionId));
+        var before = CategoryPeriod.of(transaction.getCategory(), transaction.getTransactionDate());
         transaction.overrideCategory(category);
-        return TransactionDto.from(transaction);
+        var result = TransactionDto.from(transaction);
+
+        publishChanged(pairOf(before, CategoryPeriod.of(category, transaction.getTransactionDate())));
+        return result;
     }
 
     /**
@@ -201,6 +236,20 @@ public class TransactionService {
     }
 
     // ---- helpers ----
+
+    /**
+     * Publishes a {@link TransactionsChangedEvent} inside the current transaction. AFTER_COMMIT
+     * listeners receive it only if this transaction commits. Called as the last step of each write
+     * method, using only values captured before {@code applyDelta} cleared the persistence context.
+     */
+    private void publishChanged(Set<CategoryPeriod> affected) {
+        events.publishEvent(new TransactionsChangedEvent(SecurityUtils.currentUserId(), affected));
+    }
+
+    /** One pair if old and new are the same, otherwise both. */
+    private static Set<CategoryPeriod> pairOf(CategoryPeriod before, CategoryPeriod after) {
+        return before.equals(after) ? Set.of(before) : Set.of(before, after);
+    }
 
     private Transaction loadOwnedForUpdate(Long transactionId) {
         return transactionRepository.findByIdAndUserIdForUpdate(transactionId, SecurityUtils.currentUserId())
