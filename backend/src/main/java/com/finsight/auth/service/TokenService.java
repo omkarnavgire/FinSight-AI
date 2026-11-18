@@ -79,8 +79,19 @@ public class TokenService {
      * @throws InvalidTokenException if the token is not found, expired, or already revoked
      *         with {@code LOGOUT} or {@code REUSE_DETECTED}
      */
-    @Transactional
+    @Transactional(noRollbackFor = InvalidTokenException.class)
     public RotationResult rotate(String rawToken) {
+        // Transaction semantics (AC-TOK-2 / AC-AUTH-2):
+        // A rejected token raises InvalidTokenException (-> 401). That exception must NOT roll back
+        // this transaction, because the ROTATED re-use path has already bulk-revoked the user's
+        // active tokens to REUSE_DETECTED, and that revocation must be committed.
+        // Every InvalidTokenException path is safe to commit:
+        //   - not found / expired      -> no writes were made
+        //   - LOGOUT / REUSE_DETECTED  -> no writes were made (no cascade, AC-TOK-2b / AC-TOK-3)
+        //   - ROTATED                  -> only the REUSE_DETECTED bulk revocation was written
+        // Any other RuntimeException (e.g. a database error) still rolls back as normal.
+        // This method must be the outermost transaction boundary: if a caller wraps it in its
+        // own @Transactional, the caller's rollback would undo the revocation. See AuthService.refresh().
         var hash = sha256Hex(rawToken);
 
         // Acquire row-level lock before reading state (AC-TOK-7).

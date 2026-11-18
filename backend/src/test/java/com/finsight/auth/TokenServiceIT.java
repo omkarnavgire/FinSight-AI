@@ -3,6 +3,8 @@ package com.finsight.auth;
 import com.finsight.auth.domain.RevocationReason;
 import com.finsight.auth.repository.RefreshTokenRepository;
 import com.finsight.auth.service.TokenService;
+import com.finsight.shared.exception.InvalidTokenException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +21,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Integration test for concurrent token rotation (T-11b, AC-TOK-7).
@@ -54,6 +57,9 @@ class TokenServiceIT {
 
     @Autowired
     private RefreshTokenRepository tokenRepository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @Test
     @DisplayName("AC-TOK-7: two concurrent rotate() calls with the same token — exactly one succeeds")
@@ -113,5 +119,99 @@ class TokenServiceIT {
         assertThat(reuseDetectedCount)
                 .as("Loser should have triggered REUSE_DETECTED bulk revocation")
                 .isPositive();
+    }
+
+    // ---- Persisted-state tests (AC-TOK-2, AC-TOK-2b, AC-TOK-3) ----
+    // Each test uses its own user IDs: the MySQL container is shared by the whole class.
+
+    @Test
+    @DisplayName("AC-TOK-2: ROTATED re-use commits REUSE_DETECTED for every active token; other users unaffected")
+    void rotatedReuse_persistsReuseDetected_andOtherUsersUnaffected() {
+        insertUser(1001L);
+        insertUser(1002L);
+
+        var stolenToken = tokenService.issue(1001L);
+        var secondSession = tokenService.issue(1001L);
+        var otherUserToken = tokenService.issue(1002L);
+
+        // Legitimate rotation: stolenToken becomes ROTATED, a new token is issued.
+        var rotated = tokenService.rotate(stolenToken);
+
+        // Attacker replays the ROTATED token.
+        assertThatThrownBy(() -> tokenService.rotate(stolenToken))
+                .isInstanceOf(InvalidTokenException.class);
+
+        // Committed DB state: user 1001 has no active tokens left.
+        assertThat(tokenRepository.findByUserIdAndRevokedFalse(1001L))
+                .as("All of user 1001's active tokens must be revoked and committed")
+                .isEmpty();
+        assertThat(reasonOf(secondSession)).isEqualTo(RevocationReason.REUSE_DETECTED);
+        assertThat(reasonOf(rotated.newRawToken())).isEqualTo(RevocationReason.REUSE_DETECTED);
+        // The replayed token keeps its original ROTATED reason.
+        assertThat(reasonOf(stolenToken)).isEqualTo(RevocationReason.ROTATED);
+
+        // A different user's session is not touched.
+        var other = tokenRepository.findByTokenHash(TokenService.sha256Hex(otherUserToken)).orElseThrow();
+        assertThat(other.isRevoked()).isFalse();
+        assertThat(other.getRevocationReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("AC-TOK-2b: re-presenting a REUSE_DETECTED token returns 401 and triggers no further cascade")
+    void reuseDetectedToken_representation_noFurtherCascade() {
+        insertUser(1003L);
+
+        var stolenToken = tokenService.issue(1003L);
+        var victimSession = tokenService.issue(1003L);
+        tokenService.rotate(stolenToken);
+        assertThatThrownBy(() -> tokenService.rotate(stolenToken))
+                .isInstanceOf(InvalidTokenException.class);
+        assertThat(reasonOf(victimSession)).isEqualTo(RevocationReason.REUSE_DETECTED);
+
+        // User logs in again after the incident: a fresh active session.
+        var freshSession = tokenService.issue(1003L);
+
+        // The REUSE_DETECTED token is presented again.
+        assertThatThrownBy(() -> tokenService.rotate(victimSession))
+                .isInstanceOf(InvalidTokenException.class);
+
+        // No new cascade: the fresh session is still active.
+        var fresh = tokenRepository.findByTokenHash(TokenService.sha256Hex(freshSession)).orElseThrow();
+        assertThat(fresh.isRevoked())
+                .as("REUSE_DETECTED re-presentation must not revoke the fresh session")
+                .isFalse();
+        assertThat(reasonOf(victimSession)).isEqualTo(RevocationReason.REUSE_DETECTED);
+    }
+
+    @Test
+    @DisplayName("AC-TOK-3: re-presenting a LOGOUT token returns 401; the user's other session stays active")
+    void logoutToken_representation_otherSessionStaysActive() {
+        insertUser(1004L);
+
+        var loggedOut = tokenService.issue(1004L);
+        var otherSession = tokenService.issue(1004L);
+        tokenService.revoke(loggedOut, RevocationReason.LOGOUT);
+
+        assertThatThrownBy(() -> tokenService.rotate(loggedOut))
+                .isInstanceOf(InvalidTokenException.class);
+
+        var other = tokenRepository.findByTokenHash(TokenService.sha256Hex(otherSession)).orElseThrow();
+        assertThat(other.isRevoked()).isFalse();
+        assertThat(reasonOf(loggedOut)).isEqualTo(RevocationReason.LOGOUT);
+    }
+
+    // ---- Helpers ----
+
+    private void insertUser(long id) {
+        jdbc.update("""
+                INSERT IGNORE INTO users (id, email, password_hash, full_name, role, created_at, updated_at)
+                VALUES (?, ?, 'hash', 'IT User', 'USER', NOW(), NOW())
+                """, id, "it-" + id + "@test.com");
+    }
+
+    private RevocationReason reasonOf(String rawToken) {
+        return tokenRepository.findByTokenHash(TokenService.sha256Hex(rawToken))
+                .orElseThrow()
+                .getRevocationReason();
     }
 }

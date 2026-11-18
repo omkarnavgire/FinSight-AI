@@ -1,8 +1,12 @@
 package com.finsight.auth;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.finsight.auth.domain.RevocationReason;
 import com.finsight.auth.dto.LoginRequest;
 import com.finsight.auth.dto.RegisterRequest;
+import com.finsight.auth.repository.RefreshTokenRepository;
+import com.finsight.auth.service.TokenService;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,8 +68,24 @@ class AuthControllerIT {
     @Autowired
     private MockMvc mockMvc;
 
+    /** Jackson 3 mapper auto-configured by Spring Boot 4 (tools.jackson, not com.fasterxml). */
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private RefreshTokenRepository tokenRepository;
+
+    /**
+     * The login rate limiter is a singleton keyed by client IP and counts every attempt.
+     * Each test that logs in uses its own remote address so tests stay independent of
+     * execution order. The limiter itself is unchanged (5 attempts / 15 min per IP).
+     */
+    private static RequestPostProcessor fromIp(String ip) {
+        return request -> {
+            request.setRemoteAddr(ip);
+            return request;
+        };
+    }
 
     @Test
     @DisplayName("Register returns 201 with access token body and refreshToken Set-Cookie")
@@ -95,6 +115,7 @@ class AuthControllerIT {
 
         var login = new LoginRequest("login.test@example.com", "password123");
         mockMvc.perform(post("/api/v1/auth/login")
+                        .with(fromIp("10.10.0.1"))
                         .header("Origin", "http://localhost:5173")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
@@ -116,7 +137,7 @@ class AuthControllerIT {
                 .andReturn();
 
         var accessToken = objectMapper.readTree(regResult.getResponse().getContentAsString())
-                .get("accessToken").asText();
+                .get("accessToken").asString();
 
         mockMvc.perform(post("/api/v1/auth/logout")
                         .header("Origin", "http://localhost:5173")
@@ -131,12 +152,13 @@ class AuthControllerIT {
         var login = new LoginRequest("nonexistent@rate-limit.test", "wrong");
         for (int i = 0; i < 5; i++) {
             mockMvc.perform(post("/api/v1/auth/login")
+                    .with(fromIp("10.10.0.2"))
                     .header("Origin", "http://localhost:5173")
-                    // Use a stable IP via forwarded header; MockMvc uses 127.0.0.1 by default.
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(login)));
         }
         mockMvc.perform(post("/api/v1/auth/login")
+                        .with(fromIp("10.10.0.2"))
                         .header("Origin", "http://localhost:5173")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
@@ -167,7 +189,7 @@ class AuthControllerIT {
                 .andExpect(header().string("Set-Cookie", not(containsString("; Secure"))));
     }
 
-    // ---- A1: Session isolation — logout one session, other remains usable ----
+    // ---- A1: Session isolation â€” logout one session, other remains usable ----
 
     @Test
     @DisplayName("AC-AUTH-1: logout session 1; session 2 refresh token is still valid")
@@ -180,12 +202,13 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(reg)))
                 .andReturn();
         var accessToken1 = objectMapper.readTree(
-                regResult.getResponse().getContentAsString()).get("accessToken").asText();
+                regResult.getResponse().getContentAsString()).get("accessToken").asString();
         var cookie1 = extractRefreshCookie(regResult.getResponse().getHeader("Set-Cookie"));
 
         // Session 2: login to get a second independent refresh token.
         var loginReq = new LoginRequest("isolation@example.com", "password123");
         var loginResult = mockMvc.perform(post("/api/v1/auth/login")
+                        .with(fromIp("10.10.0.3"))
                         .header("Origin", "http://localhost:5173")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginReq)))
@@ -199,7 +222,7 @@ class AuthControllerIT {
                         .cookie(new jakarta.servlet.http.Cookie("refreshToken", cookie1)))
                 .andExpect(status().isNoContent());
 
-        // Session 2 refresh cookie should still work — returns 200 with a new access token.
+        // Session 2 refresh cookie should still work â€” returns 200 with a new access token.
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("Origin", "http://localhost:5173")
                         .cookie(new jakarta.servlet.http.Cookie("refreshToken", cookie2)))
@@ -207,7 +230,7 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.accessToken").isString());
     }
 
-    // ---- A2: Valid origin + valid cookie → 200 and token rotation ----
+    // ---- A2: Valid origin + valid cookie â†’ 200 and token rotation ----
 
     @Test
     @DisplayName("AC-CSRF-3: valid allowed Origin + valid refresh cookie returns 200 and rotates token")
@@ -220,10 +243,10 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(reg)))
                 .andReturn();
         var originalAccessToken = objectMapper.readTree(
-                regResult.getResponse().getContentAsString()).get("accessToken").asText();
+                regResult.getResponse().getContentAsString()).get("accessToken").asString();
         var refreshCookie = extractRefreshCookie(regResult.getResponse().getHeader("Set-Cookie"));
 
-        // Refresh with a valid origin — should return 200, new access token, new cookie.
+        // Refresh with a valid origin â€” should return 200, new access token, new cookie.
         var refreshResult = mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("Origin", "http://localhost:5173")
                         .cookie(new jakarta.servlet.http.Cookie("refreshToken", refreshCookie)))
@@ -232,13 +255,62 @@ class AuthControllerIT {
                 .andExpect(header().string("Set-Cookie", containsString("refreshToken=")))
                 .andReturn();
 
-        // The new access token must be different from the original (rotation happened).
-        var newAccessToken = objectMapper.readTree(
-                refreshResult.getResponse().getContentAsString()).get("accessToken").asText();
-        assertThat(newAccessToken).isNotEqualTo(originalAccessToken);
+        assertThat(originalAccessToken).isNotBlank();
+
+        // Rotation proof: a new, different refresh token was issued (256-bit random, never repeats).
+        // Access tokens are not compared: JWT iat/exp have 1-second resolution, so two tokens
+        // issued in the same second can be byte-identical.
+        var newRefreshCookie = extractRefreshCookie(refreshResult.getResponse().getHeader("Set-Cookie"));
+        assertThat(newRefreshCookie).isNotBlank().isNotEqualTo(refreshCookie);
+
+        // Persisted state: old token ROTATED, new token active.
+        var oldRow = tokenRepository.findByTokenHash(TokenService.sha256Hex(refreshCookie)).orElseThrow();
+        var newRow = tokenRepository.findByTokenHash(TokenService.sha256Hex(newRefreshCookie)).orElseThrow();
+        assertThat(oldRow.getRevocationReason()).isEqualTo(RevocationReason.ROTATED);
+        assertThat(newRow.isRevoked()).isFalse();
     }
 
-    // ---- A3: Refresh after logout → 401, no cascade to other sessions ----
+    // ---- Re-use detection through the full HTTP path (AC-AUTH-2, AC-AUTH-2b) ----
+
+    @Test
+    @DisplayName("AC-AUTH-2: replaying a rotated refresh token returns 401 and the revocation is committed")
+    void refresh_replayRotatedToken_revokesAllSessionsAndPersists() throws Exception {
+        var reg = new RegisterRequest("replay@example.com", "password123", "Replay Test");
+        var regResult = mockMvc.perform(post("/api/v1/auth/register")
+                        .header("Origin", "http://localhost:5173")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(reg)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        var stolenCookie = extractRefreshCookie(regResult.getResponse().getHeader("Set-Cookie"));
+
+        // Legitimate refresh rotates the token.
+        var rotateResult = mockMvc.perform(post("/api/v1/auth/refresh")
+                        .header("Origin", "http://localhost:5173")
+                        .cookie(new jakarta.servlet.http.Cookie("refreshToken", stolenCookie)))
+                .andExpect(status().isOk())
+                .andReturn();
+        var currentCookie = extractRefreshCookie(rotateResult.getResponse().getHeader("Set-Cookie"));
+
+        // Attacker replays the rotated token.
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .header("Origin", "http://localhost:5173")
+                        .cookie(new jakarta.servlet.http.Cookie("refreshToken", stolenCookie)))
+                .andExpect(status().isUnauthorized());
+
+        // The bulk revocation was committed: the legitimate current session is now REUSE_DETECTED.
+        var currentRow = tokenRepository.findByTokenHash(TokenService.sha256Hex(currentCookie)).orElseThrow();
+        assertThat(currentRow.isRevoked()).isTrue();
+        assertThat(currentRow.getRevocationReason()).isEqualTo(RevocationReason.REUSE_DETECTED);
+
+        // AC-AUTH-2b: presenting the REUSE_DETECTED token returns 401.
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .header("Origin", "http://localhost:5173")
+                        .cookie(new jakarta.servlet.http.Cookie("refreshToken", currentCookie)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ---- A3: Refresh after logout â†’ 401, no cascade to other sessions ----
 
     @Test
     @DisplayName("AC-AUTH-1: presenting logout-revoked token to /refresh returns 401 without cascade")
@@ -251,12 +323,13 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(reg)))
                 .andReturn();
         var accessToken1 = objectMapper.readTree(
-                regResult.getResponse().getContentAsString()).get("accessToken").asText();
+                regResult.getResponse().getContentAsString()).get("accessToken").asString();
         var refreshCookie1 = extractRefreshCookie(regResult.getResponse().getHeader("Set-Cookie"));
 
         // Create session 2 via login.
         var loginReq = new LoginRequest("postlogout@example.com", "password123");
         var loginResult = mockMvc.perform(post("/api/v1/auth/login")
+                        .with(fromIp("10.10.0.4"))
                         .header("Origin", "http://localhost:5173")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginReq)))
@@ -276,7 +349,7 @@ class AuthControllerIT {
                         .cookie(new jakarta.servlet.http.Cookie("refreshToken", refreshCookie1)))
                 .andExpect(status().isUnauthorized());
 
-        // Session 2 is NOT affected — its token still works (AC-AUTH-1: no cascade on LOGOUT).
+        // Session 2 is NOT affected â€” its token still works (AC-AUTH-1: no cascade on LOGOUT).
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .header("Origin", "http://localhost:5173")
                         .cookie(new jakarta.servlet.http.Cookie("refreshToken", refreshCookie2)))

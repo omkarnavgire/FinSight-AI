@@ -2,6 +2,7 @@ package com.finsight.shared.advice;
 
 import com.finsight.shared.exception.AuthenticationFailedException;
 import com.finsight.shared.exception.InvalidTokenException;
+import com.finsight.shared.exception.NotFoundException;
 import com.finsight.shared.exception.RateLimitExceededException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -25,6 +26,22 @@ import java.net.URI;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /**
+     * Handles not-found and cross-user access scenarios — both return 404.
+     *
+     * <p>Returning 403 on a cross-user access would reveal that the resource
+     * exists but belongs to someone else. 404 avoids leaking that information.
+     */
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleNotFound(
+            NotFoundException ex, WebRequest request) {
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setType(URI.create("https://finsight.com/errors/not-found"));
+        problem.setTitle("Not Found");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    }
 
     /**
      * Handles invalid or revoked refresh tokens — returns 401.

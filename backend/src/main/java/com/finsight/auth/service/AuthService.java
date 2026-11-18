@@ -107,10 +107,14 @@ public class AuthService {
     /**
      * Rotates the refresh token and issues a new access token.
      *
+     * <p>Deliberately NOT {@code @Transactional}. {@link TokenService#rotate} is the transaction
+     * boundary. If this method opened an outer transaction, {@code rotate()} would join it, and the
+     * {@code InvalidTokenException} propagating out of here would roll back the REUSE_DETECTED
+     * bulk revocation that must be persisted (AC-TOK-2). The user lookups below are read-only.
+     *
      * @param rawRefreshToken the raw token extracted from the HttpOnly cookie
      * @return new tokens (new refresh token delivered via cookie — see controller)
      */
-    @Transactional
     public AuthResult refresh(String rawRefreshToken) {
         var result = tokenService.rotate(rawRefreshToken);
         var email = resolveEmail(result.userId());
