@@ -29,11 +29,11 @@ An advanced financial intelligence platform built as a **Modular Monolith**.
 
 ## Getting Started
 
-> Application code is not yet implemented. This section will be updated.
+The backend needs a MySQL 8 database and these environment variables: `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`.
 
 ```bash
-# Backend (requires Java 25 + Maven)
-./mvnw spring-boot:run
+# Backend (requires Java 25; Maven wrapper included)
+cd backend && ./mvnw spring-boot:run
 
 # Frontend (requires Node 20+)
 cd frontend && npm install && npm run dev
@@ -53,4 +53,19 @@ No real personal financial information is stored or required.
 
 ## Status
 
-🟡 **Foundation phase** — documentation and architecture defined, implementation pending.
+🟡 **MVP backend in progress** — phases follow `.kiro/specs/finsight-foundation/tasks.md`.
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 1 | Project scaffold, Flyway migrations V1–V7 | ✅ Done |
+| 2 | Auth (JWT, refresh-token rotation, rate limiting) | ✅ Done |
+| 3 | Shared ownership, country allowlist, module boundaries | ✅ Done |
+| 4 | Accounts | ✅ Done |
+| 5 | Transactions | ✅ Done |
+| 6 | Budgeting and alerts | ✅ Done |
+| 7 | Analytics | 🔄 Implemented, verification pending |
+| 8 | Cash-flow forecast | 🔄 Implemented, verification pending |
+| 9 | Fraud detection | ⬜ Not started |
+| 10–12 | Shared infrastructure, frontend, quality gate | ⬜ Not started |
+
+Investments, AI insights and reporting are post-MVP.
