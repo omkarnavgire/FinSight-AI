@@ -15,10 +15,14 @@ import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,6 +37,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest
 @Testcontainers
 class TokenServiceIT {
+
+    /** User IDs for the concurrency test; separate from the 1001–1004 range used below. */
+    private static final AtomicLong CONCURRENT_USERS = new AtomicLong(2000);
 
     @Container
     static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0")
@@ -62,63 +69,53 @@ class TokenServiceIT {
     private JdbcTemplate jdbc;
 
     @Test
-    @DisplayName("AC-TOK-7: two concurrent rotate() calls with the same token — exactly one succeeds")
+    @DisplayName("AC-TOK-7: two concurrent rotate() calls with the same token: one succeeds, the other is a 401 that triggers re-use detection")
     void concurrentRotation_exactlyOneSucceeds() throws Exception {
-        // Issue a token for a fake user (userId=1).
-        // The users table must have a row for FK integrity; seed one via raw SQL or use a user
-        // that the DataSeeder would create. For this IT we insert directly.
-        // Note: this test requires a user row to exist for the same-module FK.
-        // We use a SQL command via JdbcTemplate — injected here to avoid coupling to UserService.
-        // For now, disable FK checks during this test using a native approach.
-        // A full AuthControllerIT would test this end-to-end; this IT focuses on the locking behaviour.
+        // Fresh user per invocation, so repeated runs never see data from an earlier run.
+        long userId = CONCURRENT_USERS.incrementAndGet();
+        insertUser(userId);
+        var rawToken = tokenService.issue(userId);
 
-        // Insert a test user row directly so the FK constraint is satisfied.
-        mysql.execInContainer("mysql", "-ufinsight", "-pfinsight_it_pw", "finsight_it",
-                "-e", "INSERT IGNORE INTO users (id,email,password_hash,full_name,role,created_at,updated_at) " +
-                      "VALUES (999,'it@test.com','hash','IT User','USER',NOW(),NOW())");
-
-        // Issue a token for user 999.
-        var rawToken = tokenService.issue(999L);
-
-        var successCount = new AtomicInteger(0);
+        // Both threads wait at the gate, then call rotate() at the same moment.
+        var gate = new CountDownLatch(1);
+        Callable<String> attempt = () -> {
+            gate.await();
+            try {
+                tokenService.rotate(rawToken);
+                return "ROTATED";
+            } catch (InvalidTokenException expectedForLoser) {
+                return "INVALID_TOKEN";
+            }
+            // Any other exception (deadlock, lock timeout, other database error) is NOT caught:
+            // Future.get() rethrows it below and the test fails with the real cause.
+        };
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
-        Future<?> f1 = pool.submit(() -> {
-            try {
-                tokenService.rotate(rawToken);
-                successCount.incrementAndGet();
-            } catch (Exception e) {
-                // Expected for the loser.
-            }
-        });
-        Future<?> f2 = pool.submit(() -> {
-            try {
-                tokenService.rotate(rawToken);
-                successCount.incrementAndGet();
-            } catch (Exception e) {
-                // Expected for the loser.
-            }
-        });
+        try {
+            Future<String> f1 = pool.submit(attempt);
+            Future<String> f2 = pool.submit(attempt);
+            gate.countDown();
 
-        f1.get();
-        f2.get();
-        pool.shutdown();
+            assertThat(List.of(f1.get(30, TimeUnit.SECONDS), f2.get(30, TimeUnit.SECONDS)))
+                    .as("Exactly one rotation succeeds and the other is rejected with InvalidTokenException")
+                    .containsExactlyInAnyOrder("ROTATED", "INVALID_TOKEN");
+        } finally {
+            pool.shutdownNow();
+        }
 
-        // Exactly one rotation should have succeeded.
-        assertThat(successCount.get())
-                .as("Exactly one concurrent rotation should succeed")
-                .isEqualTo(1);
-
-        // The loser triggered re-use detection: all active tokens should now be REUSE_DETECTED.
-        var activeAfter = tokenRepository.findByUserIdAndRevokedFalse(999L);
+        // The loser saw ROTATED and triggered re-use detection: no active token is left,
+        // including the one the winner just received.
+        assertThat(tokenRepository.findByUserIdAndRevokedFalse(userId))
+                .as("Re-use detection must revoke every active token of the user")
+                .isEmpty();
         var reuseDetectedCount = tokenRepository.findAll().stream()
-                .filter(t -> t.getUserId().equals(999L))
+                .filter(t -> t.getUserId().equals(userId))
                 .filter(t -> t.getRevocationReason() == RevocationReason.REUSE_DETECTED)
                 .count();
-
         assertThat(reuseDetectedCount)
                 .as("Loser should have triggered REUSE_DETECTED bulk revocation")
                 .isPositive();
+        assertThat(reasonOf(rawToken)).isEqualTo(RevocationReason.ROTATED);
     }
 
     // ---- Persisted-state tests (AC-TOK-2, AC-TOK-2b, AC-TOK-3) ----
@@ -198,6 +195,41 @@ class TokenServiceIT {
         var other = tokenRepository.findByTokenHash(TokenService.sha256Hex(otherSession)).orElseThrow();
         assertThat(other.isRevoked()).isFalse();
         assertThat(reasonOf(loggedOut)).isEqualTo(RevocationReason.LOGOUT);
+    }
+
+    // ---- S-1 regression: logout with a stolen ROTATED token must not silence re-use detection ----
+
+    @Test
+    @DisplayName("S-1: attacker logs out with the rotated token; the victim's replay still triggers REUSE_DETECTED")
+    void logoutWithRotatedToken_doesNotSuppressReuseDetection() {
+        insertUser(1005L);
+        var stolen = tokenService.issue(1005L);
+
+        // Attacker rotates first and gets a live session; the stolen token is now ROTATED.
+        var attackerSession = tokenService.rotate(stolen).newRawToken();
+        // Attacker "logs out" with the stolen token (same user identity) to try to downgrade it.
+        tokenService.revokeForLogout(stolen, 1005L);
+        assertThat(reasonOf(stolen)).isEqualTo(RevocationReason.ROTATED);
+
+        // The victim presents the stolen token: re-use detection still fires and is committed.
+        assertThatThrownBy(() -> tokenService.rotate(stolen)).isInstanceOf(InvalidTokenException.class);
+        assertThat(reasonOf(attackerSession)).isEqualTo(RevocationReason.REUSE_DETECTED);
+        assertThat(tokenRepository.findByUserIdAndRevokedFalse(1005L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-1: logout with another user's token is rejected and leaves that token active")
+    void logoutWithOtherUsersToken_rejected() {
+        insertUser(1006L);
+        insertUser(1007L);
+        var victimToken = tokenService.issue(1006L);
+
+        assertThatThrownBy(() -> tokenService.revokeForLogout(victimToken, 1007L))
+                .isInstanceOf(InvalidTokenException.class);
+
+        var victim = tokenRepository.findByTokenHash(TokenService.sha256Hex(victimToken)).orElseThrow();
+        assertThat(victim.isRevoked()).isFalse();
+        assertThat(victim.getRevocationReason()).isNull();
     }
 
     // ---- Helpers ----

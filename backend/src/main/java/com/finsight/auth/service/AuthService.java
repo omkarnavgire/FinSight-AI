@@ -1,6 +1,5 @@
 package com.finsight.auth.service;
 
-import com.finsight.auth.domain.RevocationReason;
 import com.finsight.auth.domain.User;
 import com.finsight.auth.dto.LoginRequest;
 import com.finsight.auth.dto.RegisterRequest;
@@ -8,6 +7,7 @@ import com.finsight.auth.dto.TokenResponse;
 import com.finsight.auth.repository.UserRepository;
 import com.finsight.shared.exception.AuthenticationFailedException;
 import com.finsight.shared.exception.RateLimitExceededException;
+import com.finsight.shared.ownership.SecurityUtils;
 import com.finsight.shared.security.RateLimiter;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -131,7 +131,8 @@ public class AuthService {
     @Transactional
     public void logout(String rawRefreshToken) {
         if (rawRefreshToken != null && !rawRefreshToken.isBlank()) {
-            tokenService.revoke(rawRefreshToken, RevocationReason.LOGOUT);
+            // S-1: only the caller's own, still-active token is revoked; see TokenService#revokeForLogout.
+            tokenService.revokeForLogout(rawRefreshToken, SecurityUtils.currentUserId());
         }
     }
 
