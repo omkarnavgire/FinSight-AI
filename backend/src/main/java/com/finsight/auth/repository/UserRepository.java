@@ -1,8 +1,12 @@
 package com.finsight.auth.repository;
 
 import com.finsight.auth.domain.User;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -29,4 +33,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @return {@code true} if a user with this email exists
      */
     boolean existsByEmail(String email);
+
+    /**
+     * Keyset page of user IDs greater than {@code lastId}, in ascending order (Phase 8).
+     * Only IDs are returned; no other user data leaves the auth module.
+     *
+     * @param lastId   exclusive lower bound; {@code 0} for the first page
+     * @param pageable page size only; always use page index 0 (keyset, not offset)
+     * @return up to {@code pageable.getPageSize()} IDs
+     */
+    @Query("SELECT u.id FROM User u WHERE u.id > :lastId ORDER BY u.id ASC")
+    List<Long> findIdsAfter(@Param("lastId") long lastId, Pageable pageable);
 }

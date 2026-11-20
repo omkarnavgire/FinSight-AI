@@ -128,4 +128,72 @@ class TokenServiceTest {
 
         verify(tokenRepository, never()).revokeAllActiveForUser(any(), any());
     }
+
+    // ---- S-1: logout must never overwrite a revocation reason or touch another user's token ----
+
+    private RefreshToken lockedToken(String rawToken, long userId, RevocationReason alreadyRevokedAs) {
+        var stored = RefreshToken.create(userId, TokenService.sha256Hex(rawToken), LocalDateTime.now().plusDays(7));
+        if (alreadyRevokedAs != null) {
+            stored.revoke(alreadyRevokedAs);
+        }
+        when(tokenRepository.findByTokenHashForUpdate(TokenService.sha256Hex(rawToken))).thenReturn(Optional.of(stored));
+        return stored;
+    }
+
+    @Test
+    @DisplayName("S-1: logout of the caller's own active token sets LOGOUT, under a row lock")
+    void logout_ownActiveToken_setsLogout() {
+        var stored = lockedToken("own-active", 7L, null);
+
+        tokenService.revokeForLogout("own-active", 7L);
+
+        assertThat(stored.getRevocationReason()).isEqualTo(RevocationReason.LOGOUT);
+        verify(tokenRepository).save(stored);
+        verify(tokenRepository, never()).findByTokenHash(any());
+    }
+
+    @Test
+    @DisplayName("S-1: logout with a ROTATED token keeps ROTATED and writes nothing")
+    void logout_rotatedToken_keepsRotated() {
+        var stored = lockedToken("stolen-rotated", 7L, RevocationReason.ROTATED);
+
+        tokenService.revokeForLogout("stolen-rotated", 7L);
+
+        assertThat(stored.getRevocationReason()).isEqualTo(RevocationReason.ROTATED);
+        verify(tokenRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("S-1: logout with another user's token is rejected like a missing token and changes nothing")
+    void logout_otherUsersToken_rejected() {
+        var stored = lockedToken("victim-token", 7L, null);
+
+        assertThatThrownBy(() -> tokenService.revokeForLogout("victim-token", 8L))
+                .isInstanceOf(InvalidTokenException.class);
+
+        assertThat(stored.isRevoked()).isFalse();
+        verify(tokenRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("S-1: administrative revoke never overwrites an existing reason")
+    void revoke_alreadyRevoked_keepsReason() {
+        var stored = lockedToken("already-reuse", 7L, RevocationReason.REUSE_DETECTED);
+
+        tokenService.revoke("already-reuse", RevocationReason.LOGOUT);
+
+        assertThat(stored.getRevocationReason()).isEqualTo(RevocationReason.REUSE_DETECTED);
+        verify(tokenRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("S-1: the entity itself never overwrites a revocation reason")
+    void entity_revoke_neverOverwrites() {
+        var token = RefreshToken.create(1L, "hash", LocalDateTime.now().plusDays(7));
+        token.revoke(RevocationReason.ROTATED);
+
+        token.revoke(RevocationReason.LOGOUT);
+
+        assertThat(token.getRevocationReason()).isEqualTo(RevocationReason.ROTATED);
+    }
 }

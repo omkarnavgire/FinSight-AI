@@ -55,8 +55,14 @@ public class RefreshToken {
         return rt;
     }
 
-    /** Marks this token as revoked with the given reason. */
+    /**
+     * Marks this token as revoked with the given reason. A token that is already revoked is left
+     * unchanged: the first reason is never overwritten (S-1), so {@code ROTATED} stays detectable.
+     */
     public void revoke(RevocationReason reason) {
+        if (this.revoked) {
+            return;
+        }
         this.revoked = true;
         this.revocationReason = reason;
     }

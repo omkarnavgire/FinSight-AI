@@ -6,6 +6,7 @@ import com.finsight.auth.repository.RefreshTokenRepository;
 import com.finsight.shared.exception.InvalidTokenException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -74,12 +75,19 @@ public class TokenService {
      * Rotates a refresh token: validates the incoming raw token, marks it {@code ROTATED},
      * and issues a new one — all in a single transaction with a row-level lock (AC-TOK-7).
      *
+     * <p>Runs at {@code READ COMMITTED}. Under MySQL's default {@code REPEATABLE READ}, the
+     * {@code FOR UPDATE} lookup on the non-unique {@code token_hash} index also takes a gap lock.
+     * A second request waiting on that lock could then deadlock with the winner's INSERT of the
+     * new token, and the loser would fail with a database error instead of reaching re-use
+     * detection. {@code READ COMMITTED} keeps the row lock but takes no gap locks. The loser still
+     * waits for the winner, then reads the committed {@code ROTATED} state.
+     *
      * @param rawToken the raw token from the client's cookie
      * @return {@link RotationResult} containing the new raw token and the owner's userId
      * @throws InvalidTokenException if the token is not found, expired, or already revoked
      *         with {@code LOGOUT} or {@code REUSE_DETECTED}
      */
-    @Transactional(noRollbackFor = InvalidTokenException.class)
+    @Transactional(isolation = Isolation.READ_COMMITTED, noRollbackFor = InvalidTokenException.class)
     public RotationResult rotate(String rawToken) {
         // Transaction semantics (AC-TOK-2 / AC-AUTH-2):
         // A rejected token raises InvalidTokenException (-> 401). That exception must NOT roll back
@@ -126,21 +134,43 @@ public class TokenService {
     public record RotationResult(String newRawToken, Long userId) {}
 
     /**
-     * Revokes the token associated with the given raw value, using the specified reason.
+     * Revokes an <em>active</em> token with the given reason (administrative revocation).
      *
-     * <p>Used for logout ({@code LOGOUT}) and administrative revocation.
+     * <p>A token that is already revoked is left exactly as it is: its reason is never
+     * overwritten (S-1). In particular a {@code ROTATED} token stays {@code ROTATED}, so presenting
+     * it again still triggers re-use detection. The row is locked first ({@code FOR UPDATE},
+     * {@code READ COMMITTED}, the same as {@link #rotate}) so a concurrent rotation is serialised.
      *
-     * @param rawToken the raw token from the client's cookie
-     * @param reason   the revocation reason to record
+     * @param rawToken the raw token
+     * @param reason   the revocation reason to record if the token is still active
      * @throws InvalidTokenException if the token is not found
      */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void revoke(String rawToken, RevocationReason reason) {
-        var hash = sha256Hex(rawToken);
-        var stored = tokenRepository.findByTokenHash(hash)
-                .orElseThrow(() -> new InvalidTokenException("Refresh token not found"));
-        stored.revoke(reason);
-        tokenRepository.save(stored);
+        revokeIfActive(lockByRawToken(rawToken), reason);
+    }
+
+    /**
+     * Logout: revokes the caller's own refresh token with {@code LOGOUT} (S-1).
+     *
+     * <ul>
+     *   <li>Another user's token behaves exactly like a missing one: {@link InvalidTokenException}
+     *       (401) and nothing changes.</li>
+     *   <li>An already-revoked token keeps its reason. Logging out with a stolen {@code ROTATED}
+     *       token therefore cannot turn it into {@code LOGOUT} and silence re-use detection.</li>
+     * </ul>
+     *
+     * @param rawToken     the raw token from the client's cookie
+     * @param callerUserId the authenticated caller, from the security context
+     * @throws InvalidTokenException if the token is not found or belongs to another user
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void revokeForLogout(String rawToken, Long callerUserId) {
+        var stored = lockByRawToken(rawToken);
+        if (!stored.getUserId().equals(callerUserId)) {
+            throw new InvalidTokenException("Refresh token not found");
+        }
+        revokeIfActive(stored, RevocationReason.LOGOUT);
     }
 
     /**
@@ -156,6 +186,21 @@ public class TokenService {
     }
 
     // ---- Private helpers ----
+
+    /** Loads a token by its raw value with a row lock. Must run inside a transaction. */
+    private RefreshToken lockByRawToken(String rawToken) {
+        return tokenRepository.findByTokenHashForUpdate(sha256Hex(rawToken))
+                .orElseThrow(() -> new InvalidTokenException("Refresh token not found"));
+    }
+
+    /** Revokes only an active token; an existing revocation reason is never overwritten (S-1). */
+    private void revokeIfActive(RefreshToken stored, RevocationReason reason) {
+        if (stored.isRevoked()) {
+            return;
+        }
+        stored.revoke(reason);
+        tokenRepository.save(stored);
+    }
 
     /**
      * Handles re-use of an already-revoked token.

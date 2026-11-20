@@ -1,6 +1,7 @@
 package com.finsight.transactions;
 
 import com.finsight.accounts.service.AccountService;
+import com.finsight.fraud.service.FraudDetectionService;
 import com.finsight.shared.exception.AccountDeactivatedException;
 import com.finsight.shared.exception.InvalidCountryCodeException;
 import com.finsight.shared.exception.TransactionNotFoundException;
@@ -56,13 +57,14 @@ class TransactionServiceEventTest {
     @Mock private TransactionRepository transactionRepository;
     @Mock private AccountService accountService;
     @Mock private CategoryResolver categoryResolver;
+    @Mock private FraudDetectionService fraudDetection;
     @Mock private ApplicationEventPublisher events;
 
     private TransactionService service;
 
     @BeforeEach
     void setUp() {
-        service = new TransactionService(transactionRepository, accountService, categoryResolver, events);
+        service = new TransactionService(transactionRepository, accountService, categoryResolver, fraudDetection, events);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(CALLER, null, List.of()));
     }
