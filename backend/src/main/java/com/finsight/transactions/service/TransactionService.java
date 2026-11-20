@@ -1,6 +1,8 @@
 package com.finsight.transactions.service;
 
 import com.finsight.accounts.service.AccountService;
+import com.finsight.fraud.dto.FraudCandidate;
+import com.finsight.fraud.service.FraudDetectionService;
 import com.finsight.shared.country.CountryCodes;
 import com.finsight.shared.exception.BadRequestException;
 import com.finsight.shared.exception.InvalidCountryCodeException;
@@ -44,9 +46,10 @@ import java.util.Set;
  * every entity change in a method is made <em>before</em> {@code applyDelta}, and nothing is
  * changed on a loaded entity afterwards (it would be detached and the change silently lost).
  *
- * <h2>Fraud detection</h2>
- * The fraud rule step and fraud-alert insert from T-28's creation order are added by T-52/T-54
- * (Phase 9) at the marked places in {@link #create}.
+ * <h2>Fraud detection (Phase 9)</h2>
+ * {@link #create} runs the fraud rules read-only before the INSERT and records the fired rules as
+ * alerts after the balance update, all in its one transaction. An alert INSERT failure is never
+ * caught, so it rolls back the transaction row, the balance change and every alert (AC-ORD-2).
  */
 @Service
 public class TransactionService {
@@ -57,16 +60,15 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final AccountService accountService;
     private final CategoryResolver categoryResolver;
+    private final FraudDetectionService fraudDetection;
     private final ApplicationEventPublisher events;
 
-    /**
-     * Constructor without event publishing (events are discarded). Kept so existing unit tests
-     * construct the service unchanged; Spring uses the {@link Autowired} constructor below.
-     */
+    /** Constructor without event publishing (events are discarded); used by unit tests. */
     public TransactionService(TransactionRepository transactionRepository,
                               AccountService accountService,
-                              CategoryResolver categoryResolver) {
-        this(transactionRepository, accountService, categoryResolver, event -> { });
+                              CategoryResolver categoryResolver,
+                              FraudDetectionService fraudDetection) {
+        this(transactionRepository, accountService, categoryResolver, fraudDetection, event -> { });
     }
 
     /**
@@ -77,19 +79,21 @@ public class TransactionService {
     public TransactionService(TransactionRepository transactionRepository,
                               AccountService accountService,
                               CategoryResolver categoryResolver,
+                              FraudDetectionService fraudDetection,
                               ApplicationEventPublisher events) {
         this.transactionRepository = transactionRepository;
         this.accountService = accountService;
         this.categoryResolver = categoryResolver;
+        this.fraudDetection = fraudDetection;
         this.events = events;
     }
 
     /**
      * Adds a manual transaction and applies its amount to the account balance (FR-03-3).
      *
-     * <p>Order: validate country code (400) → confirm owned, active account (404 / 409)
-     * → [Phase 9: fraud rules] → resolve category → INSERT → balance update
-     * → [Phase 9: fraud-alert INSERT]. Nothing is written before the checks pass.
+     * <p>Order (design.md): validate country code (400) → confirm owned, active account (404 / 409)
+     * → resolve category → fraud rules (read-only) → INSERT → balance update → fraud-alert INSERTs
+     * → publish. Nothing is written before the checks pass.
      *
      * @param request validated request
      * @return the created transaction
@@ -100,11 +104,12 @@ public class TransactionService {
         requireNonZero(request.amount());
         accountService.requireOwnedActive(request.accountId());
 
-        // Phase 9 (T-52/T-54): run FraudDetectionService rules here, before the INSERT.
-
         var category = request.category() != null
                 ? request.category()
                 : categoryResolver.resolve(request.description(), request.amount());
+        var fired = fraudDetection.evaluate(new FraudCandidate(request.accountId(), request.amount(),
+                category.name(), request.description(), request.countryCode()));
+
         var saved = transactionRepository.save(Transaction.manual(
                 request.accountId(), request.amount(), category,
                 request.description(), request.transactionDate(), request.countryCode()));
@@ -112,7 +117,7 @@ public class TransactionService {
 
         accountService.applyDelta(request.accountId(), request.amount());
 
-        // Phase 9 (T-52/T-54): INSERT fraud alerts for the fired rules here, in this transaction.
+        fraudDetection.recordAlerts(result.id(), fired);
 
         publishChanged(Set.of(CategoryPeriod.of(category, request.transactionDate())));
         return result;
