@@ -5,6 +5,7 @@ import com.finsight.budgeting.dto.BudgetProgressDto;
 import com.finsight.budgeting.dto.CreateBudgetRequest;
 import com.finsight.budgeting.dto.UpdateBudgetRequest;
 import com.finsight.budgeting.service.BudgetService;
+import com.finsight.shared.pagination.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,14 +31,15 @@ public class BudgetController {
     }
 
     /**
-     * Lists the caller's budgets for the current period.
+     * Lists the caller's budgets for the current period, by category (Q-5).
      *
-     * @return 200 with the list
+     * @return 200 with one page; 400 for an invalid page or size
      */
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    public List<BudgetDto> list() {
-        return budgetService.listCurrentPeriod();
+    public PageResponse<BudgetDto> list(@RequestParam(defaultValue = "0") int page,
+                                        @RequestParam(defaultValue = "20") int size) {
+        return budgetService.listCurrentPeriodPage(page, size);
     }
 
     /**

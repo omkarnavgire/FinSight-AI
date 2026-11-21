@@ -29,22 +29,51 @@ An advanced financial intelligence platform built as a **Modular Monolith**.
 
 ## Getting Started
 
-The backend needs a MySQL 8 database and these environment variables: `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`.
+Local development uses the `dev` profile (plain HTTP, local MySQL without TLS).
+Put local-only values in `backend/application-local.yml` or `.env` (both git-ignored).
 
 ```bash
 # Backend (requires Java 25; Maven wrapper included)
-cd backend && ./mvnw spring-boot:run
+cd backend
+export SPRING_PROFILES_ACTIVE=dev DB_USERNAME=... DB_PASSWORD=... JWT_SECRET=...
+# Optional: seed synthetic demo data on an empty database (demo@finsight.dev)
+export FINSIGHT_DEMO_PASSWORD=...   # choose your own; never commit it
+./mvnw spring-boot:run
 
 # Frontend (requires Node 20+)
 cd frontend && npm install && npm run dev
 ```
+
+## Production deployment
+
+The `prod` profile (and any profile other than `dev`) enforces HTTPS. The app refuses to start
+if a required value below is missing or unsafe; errors name the variable, never its value.
+
+| Variable | Requirement |
+|----------|-------------|
+| `PUBLIC_HOST` | Public host (`host` or `host:port`) used as the HTTPS redirect target; the request's `Host` header is never used |
+| `CORS_ALLOWED_ORIGINS` | Exact `https://host[:port]` origins, comma-separated; no wildcard |
+| `TRUSTED_PROXY_REGEX` | Exact reverse-proxy IPs only, `\|`-separated with escaped dots, e.g. `10\.0\.0\.10\|10\.0\.0\.11`; no ranges or wildcards. Forwarded headers from any other address are ignored |
+| `TRUSTED_PROXY_COUNT` | `0` (the proxy's `X-Forwarded-For` is read by Tomcat, not the app) |
+| `JWT_SECRET` | At least 32 bytes |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` | MySQL connection |
+| `DB_TRUSTSTORE_PATH`, `DB_TRUSTSTORE_PASSWORD`, `DB_TRUSTSTORE_TYPE` | Truststore with the MySQL CA (default type `PKCS12`) |
+
+Assumptions:
+
+1. A reverse proxy terminates TLS, redirects port 80 to 443, overwrites `X-Forwarded-Proto` and `X-Forwarded-For`, and drops copies sent by clients.
+2. The app is reachable only from that proxy.
+3. MySQL serves TLS with a certificate whose name matches `DB_HOST`; the app connects with `sslMode=VERIFY_IDENTITY`.
+4. Secrets come from the environment or a secrets manager, never from files in Git.
+5. One instance only: the rate limiter is in memory.
+6. The `dev` profile is never used outside a developer machine. The app refuses to start under `dev` if the database host is not `localhost`, `127.0.0.1` or `::1`. Any profile other than `dev` (including `test`) gets every production check.
 
 ## Security Notes
 
 - All secrets in environment variables — never in source.
 - JWT access tokens expire in 15 minutes; refresh tokens in 7 days.
 - Passwords hashed with BCrypt (strength 12).
-- HTTPS enforced in all non-local profiles.
+- HTTPS enforced in all non-local profiles (HTTP gets `308`; HSTS on HTTPS responses).
 
 ## Data
 
@@ -63,9 +92,10 @@ No real personal financial information is stored or required.
 | 4 | Accounts | ✅ Done |
 | 5 | Transactions | ✅ Done |
 | 6 | Budgeting and alerts | ✅ Done |
-| 7 | Analytics | 🔄 Implemented, verification pending |
-| 8 | Cash-flow forecast | 🔄 Implemented, verification pending |
-| 9 | Fraud detection | ⬜ Not started |
-| 10–12 | Shared infrastructure, frontend, quality gate | ⬜ Not started |
+| 7 | Analytics | ✅ Done |
+| 8 | Cash-flow forecast | ✅ Done |
+| 9 | Fraud detection | ✅ Done |
+| 10 | Shared infrastructure (errors, paging, dev seed data, CORS, HTTPS, DB TLS) | 🔄 Implemented, verification pending |
+| 11–12 | Frontend, quality gate | ⬜ Not started |
 
 Investments, AI insights and reporting are post-MVP.

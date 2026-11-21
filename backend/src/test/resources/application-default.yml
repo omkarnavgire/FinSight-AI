@@ -1,0 +1,8 @@
+# ---- Tests without an active profile (Testcontainers ITs) ----
+# Loaded only when no profile is active. Test classpath only; never packaged.
+# Integration tests call the app over plain HTTP through MockMvc, so HTTPS enforcement is off here.
+finsight:
+  security:
+    require-https: false
+  cors:
+    allowed-origins: http://localhost:5173

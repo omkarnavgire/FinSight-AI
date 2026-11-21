@@ -50,9 +50,10 @@ class FraudModuleBoundaryTest {
     }
 
     @Test
-    @DisplayName("Only transactions depends on fraud")
+    @DisplayName("Only transactions depends on fraud (and the dev-only devdata seeder)")
     void onlyTransactionsDependOnFraud() {
-        noClasses().that().resideOutsideOfPackages("com.finsight.fraud..", "com.finsight.transactions..")
+        noClasses().that().resideOutsideOfPackages(
+                        "com.finsight.fraud..", "com.finsight.transactions..", "com.finsight.devdata..")
                 .should().dependOnClassesThat().resideInAPackage("com.finsight.fraud..")
                 .check(PRODUCTION);
     }

@@ -11,6 +11,8 @@ import com.finsight.budgeting.repository.BudgetRepository;
 import com.finsight.shared.exception.BudgetAlreadyExistsException;
 import com.finsight.shared.exception.BudgetNotFoundException;
 import com.finsight.shared.ownership.SecurityUtils;
+import com.finsight.shared.pagination.PageParams;
+import com.finsight.shared.pagination.PageResponse;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -100,6 +102,23 @@ public class BudgetService {
                 .stream()
                 .map(BudgetDto::from)
                 .toList();
+    }
+
+    /**
+     * One page of the caller's budgets for the current period, ordered by category (Q-5).
+     *
+     * @param page zero-based page index, must be {@code >= 0}
+     * @param size page size, must be {@code >= 1}; values above 100 are capped
+     * @return one page of budgets
+     * @throws com.finsight.shared.exception.BadRequestException for invalid paging (400)
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<BudgetDto> listCurrentPeriodPage(int page, int size) {
+        var pageRequest = PageParams.of(page, size);
+        var period = YearMonth.now(clock);
+        return PageResponse.from(budgetRepository.findPageByUserIdAndPeriodYearAndPeriodMonthOrderByCategoryAscIdAsc(
+                        SecurityUtils.currentUserId(), (short) period.getYear(), (byte) period.getMonthValue(), pageRequest)
+                .map(BudgetDto::from));
     }
 
     /**

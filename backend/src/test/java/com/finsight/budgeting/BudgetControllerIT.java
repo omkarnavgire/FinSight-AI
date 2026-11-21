@@ -134,11 +134,13 @@ class BudgetControllerIT {
 
         mockMvc.perform(get("/api/v1/budgets").header("Authorization", bearer(a)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(1)))
-                .andExpect(jsonPath("$[0].id").value((int) mine))
-                .andExpect(jsonPath("$[0].periodYear").value(now.getYear()))
-                .andExpect(jsonPath("$[0].periodMonth").value(now.getMonthValue()))
-                .andExpect(jsonPath("$[0].userId").doesNotExist());
+                .andExpect(jsonPath("$.content", hasSize(1)))
+                .andExpect(jsonPath("$.content[0].id").value((int) mine))
+                .andExpect(jsonPath("$.content[0].periodYear").value(now.getYear()))
+                .andExpect(jsonPath("$.content[0].periodMonth").value(now.getMonthValue()))
+                .andExpect(jsonPath("$.content[0].userId").doesNotExist())
+                .andExpect(jsonPath("$.size").value(20))
+                .andExpect(jsonPath("$.totalElements").value(1));
     }
 
     @Test
@@ -189,7 +191,7 @@ class BudgetControllerIT {
         mockMvc.perform(delete("/api/v1/budgets/{id}", id).header("Authorization", bearer(b)))
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/budgets").header("Authorization", bearer(b)))
-                .andExpect(jsonPath("$[*].id", not(hasItem((int) id))));
+                .andExpect(jsonPath("$.content[*].id", not(hasItem((int) id))));
 
         var limit = jdbc.queryForObject("SELECT monthly_limit FROM budgets WHERE id = ?", BigDecimal.class, id);
         assertThat(limit).isEqualByComparingTo("100.00");

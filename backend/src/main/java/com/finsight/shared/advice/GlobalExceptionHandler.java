@@ -6,13 +6,20 @@ import com.finsight.shared.exception.ConflictException;
 import com.finsight.shared.exception.InvalidTokenException;
 import com.finsight.shared.exception.NotFoundException;
 import com.finsight.shared.exception.RateLimitExceededException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.net.URI;
 
@@ -28,6 +35,8 @@ import java.net.URI;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /**
      * Handles not-found and cross-user access scenarios — both return 404.
@@ -129,5 +138,62 @@ public class GlobalExceptionHandler {
                 .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
                 .toList());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problem);
+    }
+
+    // ---- T-59: framework errors and a safe fallback (Phase 10) ----
+
+    /**
+     * A path or query parameter of the wrong type (e.g. {@code /budgets/abc/progress}) — returns 400.
+     * Names the parameter, never echoes the submitted value.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ProblemDetail> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return problem(HttpStatus.BAD_REQUEST, "bad-request", "Bad Request",
+                "Parameter '" + ex.getName() + "' has an invalid value");
+    }
+
+    /** A missing or malformed JSON body — returns 400 without parser details. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ProblemDetail> handleUnreadable(HttpMessageNotReadableException ex) {
+        return problem(HttpStatus.BAD_REQUEST, "bad-request", "Bad Request", "Request body is missing or malformed");
+    }
+
+    /** Authenticated but not permitted — returns 403 (kept as 403; never turned into a 500). */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
+        return problem(HttpStatus.FORBIDDEN, "forbidden", "Forbidden", "Access denied");
+    }
+
+    /** Authentication failure raised inside a controller — returns 401 with a generic message. */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ProblemDetail> handleSpringAuthentication(AuthenticationException ex) {
+        return problem(HttpStatus.UNAUTHORIZED, "authentication-failed", "Unauthorized", "Authentication required");
+    }
+
+    /**
+     * Last resort. Spring MVC exceptions that carry their own status ({@link ErrorResponse}: unknown
+     * route 404, wrong method 405, unsupported media type 415, missing parameter 400,
+     * {@code ResponseStatusException}, ...) keep that status. Anything else is a 500 with a fixed
+     * message; the cause is logged, never returned.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
+        if (ex instanceof ErrorResponse errorResponse) {
+            var status = errorResponse.getStatusCode();
+            var problem = ProblemDetail.forStatus(status);
+            problem.setTitle(status instanceof HttpStatus known ? known.getReasonPhrase() : "Error");
+            problem.setDetail(errorResponse.getBody().getDetail());
+            return ResponseEntity.status(status).headers(errorResponse.getHeaders()).body(problem);
+        }
+        log.error("Unhandled exception", ex);
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "internal-error", "Internal Server Error",
+                "An unexpected error occurred");
+    }
+
+    private static ResponseEntity<ProblemDetail> problem(HttpStatus status, String type, String title, String detail) {
+        var problem = ProblemDetail.forStatusAndDetail(status, detail);
+        problem.setType(URI.create("https://finsight.com/errors/" + type));
+        problem.setTitle(title);
+        return ResponseEntity.status(status).body(problem);
     }
 }

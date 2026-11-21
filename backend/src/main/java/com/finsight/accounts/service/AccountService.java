@@ -7,6 +7,8 @@ import com.finsight.accounts.repository.AccountRepository;
 import com.finsight.shared.exception.AccountDeactivatedException;
 import com.finsight.shared.exception.AccountNotFoundException;
 import com.finsight.shared.ownership.SecurityUtils;
+import com.finsight.shared.pagination.PageParams;
+import com.finsight.shared.pagination.PageResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +61,21 @@ public class AccountService {
                 .stream()
                 .map(AccountDto::from)
                 .toList();
+    }
+
+    /**
+     * One page of the caller's accounts, including deactivated ones, oldest first (Q-5).
+     *
+     * @param page zero-based page index, must be {@code >= 0}
+     * @param size page size, must be {@code >= 1}; values above 100 are capped
+     * @return one page of accounts
+     * @throws com.finsight.shared.exception.BadRequestException for invalid paging (400)
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<AccountDto> listMinePage(int page, int size) {
+        return PageResponse.from(accountRepository
+                .findPageByUserIdOrderByCreatedAtAscIdAsc(SecurityUtils.currentUserId(), PageParams.of(page, size))
+                .map(AccountDto::from));
     }
 
     /**

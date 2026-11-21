@@ -1,7 +1,13 @@
-# ---- Dev profile overrides ----
+# ---- Dev profile overrides (local machine only) ----
 # Loaded alongside application.yml when spring.profiles.active=dev
-# DO NOT commit real secrets here.
+# DO NOT commit real secrets here. Put local-only values (e.g. FINSIGHT_DEMO_PASSWORD)
+# in ./application-local.yml or .env; both are git-ignored.
 spring:
+  config:
+    import: optional:file:./application-local.yml
+  datasource:
+    # Local MySQL without TLS. Never use these flags outside dev.
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:finsight_dev}?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
   jpa:
     show-sql: true
     properties:
@@ -13,6 +19,14 @@ finsight:
     cookie:
       # Secure=false allows HTTP-only local development without TLS
       secure: false
+    # Local profile: plain HTTP allowed.
+    require-https: false
+  cors:
+    allowed-origins: http://localhost:5173
+  seed:
+    # Demo user password for DataSeeder. Never committed: set FINSIGHT_DEMO_PASSWORD locally.
+    # When blank, DataSeeder skips seeding.
+    demo-password: ${FINSIGHT_DEMO_PASSWORD:}
 
 logging:
   level:

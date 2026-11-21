@@ -3,6 +3,7 @@ package com.finsight.accounts.controller;
 import com.finsight.accounts.dto.AccountDto;
 import com.finsight.accounts.dto.CreateAccountRequest;
 import com.finsight.accounts.service.AccountService;
+import com.finsight.shared.pagination.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -28,14 +29,15 @@ public class AccountController {
     }
 
     /**
-     * Lists the caller's accounts, including deactivated ones.
+     * Lists the caller's accounts, including deactivated ones, oldest first (Q-5).
      *
-     * @return 200 with the account list
+     * @return 200 with one page; 400 for an invalid page or size
      */
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    public List<AccountDto> list() {
-        return accountService.listMine();
+    public PageResponse<AccountDto> list(@RequestParam(defaultValue = "0") int page,
+                                         @RequestParam(defaultValue = "20") int size) {
+        return accountService.listMinePage(page, size);
     }
 
     /**

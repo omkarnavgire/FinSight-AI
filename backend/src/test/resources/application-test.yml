@@ -23,5 +23,6 @@ finsight:
       refresh-expiry-ms: 604800000
     cookie:
       secure: false
+    require-https: false
   cors:
     allowed-origins: http://localhost:5173

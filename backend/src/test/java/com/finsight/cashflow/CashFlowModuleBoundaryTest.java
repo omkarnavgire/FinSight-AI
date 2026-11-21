@@ -69,9 +69,9 @@ class CashFlowModuleBoundaryTest {
     }
 
     @Test
-    @DisplayName("No other module depends on cashflow")
+    @DisplayName("No other module depends on cashflow (only the dev-only devdata seeder may use it)")
     void nothingDependsOnCashflow() {
-        noClasses().that().resideOutsideOfPackage("com.finsight.cashflow..")
+        noClasses().that().resideOutsideOfPackages("com.finsight.cashflow..", "com.finsight.devdata..")
                 .should().dependOnClassesThat().resideInAPackage("com.finsight.cashflow..")
                 .check(PRODUCTION);
     }

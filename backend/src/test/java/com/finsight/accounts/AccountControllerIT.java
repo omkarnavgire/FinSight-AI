@@ -180,7 +180,7 @@ class AccountControllerIT {
 
         mockMvc.perform(get("/api/v1/accounts").header("Authorization", bearer(USER_B)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[*].id", not(hasItem(id.intValue()))));
+                .andExpect(jsonPath("$.content[*].id", not(hasItem(id.intValue()))));
     }
 
     @Test
@@ -209,7 +209,7 @@ class AccountControllerIT {
                 .andExpect(jsonPath("$.openingBalance").value(1000.00));
 
         mockMvc.perform(get("/api/v1/accounts").header("Authorization", bearer(USER_A)))
-                .andExpect(jsonPath("$[?(@.id == %d)].active".formatted(id), contains(false)));
+                .andExpect(jsonPath("$.content[?(@.id == %d)].active".formatted(id), contains(false)));
     }
 
     // ---- J-7: unauthenticated requests should be 401 ----

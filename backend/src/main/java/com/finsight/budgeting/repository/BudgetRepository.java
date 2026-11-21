@@ -3,6 +3,8 @@ package com.finsight.budgeting.repository;
 import com.finsight.budgeting.domain.Budget;
 import com.finsight.transactions.domain.Category;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -38,6 +40,10 @@ public interface BudgetRepository extends Repository<Budget, Long> {
 
     /** The user's budgets for one period, ordered by category. */
     List<Budget> findByUserIdAndPeriodYearAndPeriodMonthOrderByCategoryAsc(Long userId, short periodYear, byte periodMonth);
+
+    /** One page of the user's budgets for one period, ordered by category, then id (Q-5). */
+    Page<Budget> findPageByUserIdAndPeriodYearAndPeriodMonthOrderByCategoryAscIdAsc(
+            Long userId, short periodYear, byte periodMonth, Pageable pageable);
 
     /** The user's budget for one category and period, if any (at most one, by the unique key). */
     Optional<Budget> findByUserIdAndCategoryAndPeriodYearAndPeriodMonth(

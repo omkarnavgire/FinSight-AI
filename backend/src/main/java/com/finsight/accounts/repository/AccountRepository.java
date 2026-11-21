@@ -1,6 +1,8 @@
 package com.finsight.accounts.repository;
 
 import com.finsight.accounts.domain.Account;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -34,6 +36,9 @@ public interface AccountRepository extends Repository<Account, Long> {
 
     /** All of the user's accounts, active and deactivated, oldest first. */
     List<Account> findByUserIdOrderByCreatedAtAscIdAsc(Long userId);
+
+    /** One page of the user's accounts, oldest first (Q-5). */
+    Page<Account> findPageByUserIdOrderByCreatedAtAscIdAsc(Long userId, Pageable pageable);
 
     /**
      * Atomically adds {@code delta} to the balance of an owned, active account.

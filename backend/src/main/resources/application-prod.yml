@@ -1,0 +1,56 @@
+# ---- Production profile ----
+# Every value that differs per deployment comes from the environment. Nothing secret lives here.
+# ProductionSecurityValidator stops startup if any required value is missing or unsafe.
+#
+# Deployment assumptions:
+#  - A reverse proxy terminates TLS, redirects 80 -> 443, OVERWRITES X-Forwarded-Proto/For
+#    and drops copies sent by clients.
+#  - The app is reachable only from that proxy. TRUSTED_PROXY_REGEX lists only its IPs.
+#  - MySQL serves TLS with a certificate whose CN/SAN matches DB_HOST; its CA is in the
+#    truststore at DB_TRUSTSTORE_PATH.
+spring:
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT:3306}/${DB_NAME}?serverTimezone=UTC
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      # Verified TLS: certificate chain and hostname (DB_HOST) are checked. Kept out of the URL
+      # so the truststore password never appears in a logged JDBC URL.
+      data-source-properties:
+        sslMode: VERIFY_IDENTITY
+        trustCertificateKeyStoreUrl: file:${DB_TRUSTSTORE_PATH:}
+        trustCertificateKeyStorePassword: ${DB_TRUSTSTORE_PASSWORD:}
+        trustCertificateKeyStoreType: ${DB_TRUSTSTORE_TYPE:PKCS12}
+  jpa:
+    show-sql: false
+
+server:
+  # Trust X-Forwarded-* only from the configured proxy addresses.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      # Exact proxy addresses only, '|'-separated, dots escaped: 10\.0\.0\.10|10\.0\.0\.11 (M-2).
+      internal-proxies: ${TRUSTED_PROXY_REGEX:}
+      trusted-proxies: ""
+      remote-ip-header: X-Forwarded-For
+      protocol-header: X-Forwarded-Proto
+      port-header: X-Forwarded-Port
+
+finsight:
+  security:
+    require-https: true
+    cookie:
+      secure: true
+    # Client IP comes from Tomcat's RemoteIpValve; the app must not read X-Forwarded-For again.
+    trusted-proxy-count: 0
+    db-truststore:
+      path: ${DB_TRUSTSTORE_PATH:}
+      password: ${DB_TRUSTSTORE_PASSWORD:}
+      type: ${DB_TRUSTSTORE_TYPE:PKCS12}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+logging:
+  level:
+    root: INFO
+    com.finsight: INFO
