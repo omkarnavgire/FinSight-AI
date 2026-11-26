@@ -7,25 +7,25 @@ An advanced financial intelligence platform built as a **Modular Monolith**.
 | Layer        | Technology                        |
 |--------------|-----------------------------------|
 | Backend      | Java 25 · Spring Boot 4           |
-| Frontend     | React · TypeScript                |
+| Frontend     | React 19 · TypeScript · Vite      |
 | Database     | MySQL 8                           |
 | Security     | Spring Security · JWT             |
 | Architecture | Modular Monolith                  |
 
 ## Modules
 
-| Module              | Responsibility                                      |
-|---------------------|-----------------------------------------------------|
-| `auth`              | Registration, login, JWT issuance & refresh         |
-| `accounts`          | Bank accounts, balances, synthetic data seeding     |
-| `transactions`      | CRUD, categorisation, import                        |
-| `budgeting`         | Budget rules, period tracking, alerts               |
-| `analytics`         | Spending trends, category breakdowns, ratios        |
-| `cashflow`          | 30/60/90-day forecasting                            |
-| `investments`       | Portfolio simulation, return modelling              |
-| `fraud`             | Rule-based anomaly detection                        |
-| `ai-insights`       | LLM-backed financial advice summaries               |
-| `reporting`         | PDF/CSV export, scheduled digests                   |
+| Module              | Responsibility                                      | MVP |
+|---------------------|-----------------------------------------------------|-----|
+| `auth`              | Registration, login, JWT issuance & refresh         | ✅ |
+| `accounts`          | Accounts, balances, synthetic dev data              | ✅ |
+| `transactions`      | CRUD, filtering, auto-categorisation                | ✅ |
+| `budgeting`         | Monthly budgets, progress, 80 % / 100 % alerts      | ✅ |
+| `analytics`         | Category breakdown, six-month trend, top categories | ✅ |
+| `cashflow`          | 30/60/90-day forecasting                            | ✅ |
+| `fraud`             | Rule-based anomaly detection and alerts             | ✅ |
+| `investments`       | Portfolio simulation, return modelling              | Post-MVP |
+| `ai-insights`       | LLM-backed financial advice summaries               | Post-MVP |
+| `reporting`         | PDF/CSV export, scheduled digests                   | Post-MVP |
 
 ## Getting Started
 
@@ -40,9 +40,22 @@ export SPRING_PROFILES_ACTIVE=dev DB_USERNAME=... DB_PASSWORD=... JWT_SECRET=...
 export FINSIGHT_DEMO_PASSWORD=...   # choose your own; never commit it
 ./mvnw spring-boot:run
 
-# Frontend (requires Node 20+)
+# Frontend (requires Node 20+; tested with Node 26)
 cd frontend && npm install && npm run dev
 ```
+
+The Vite dev server proxies `/api` to `http://localhost:8080`. If that port is taken, start the backend
+with `SERVER_PORT=8081` and the frontend with `FINSIGHT_API_TARGET=http://localhost:8081`.
+Open the app at `http://localhost:5173` (not `127.0.0.1`: dev CORS allows only `localhost`).
+
+## Tests
+
+```bash
+cd backend && ./mvnw test jacoco:report   # unit + integration (Docker required for integration tests)
+cd frontend && npx tsc --noEmit && npm run lint && npx vitest run && npm run build
+```
+
+Coverage report: `backend/target/site/jacoco/index.html`.
 
 ## Production deployment
 
@@ -82,7 +95,7 @@ No real personal financial information is stored or required.
 
 ## Status
 
-🟡 **MVP backend in progress** — phases follow `.kiro/specs/finsight-foundation/tasks.md`.
+🟡 **MVP implemented; final verification in progress** — phases follow `.kiro/specs/finsight-foundation/tasks.md`.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
@@ -95,7 +108,21 @@ No real personal financial information is stored or required.
 | 7 | Analytics | ✅ Done |
 | 8 | Cash-flow forecast | ✅ Done |
 | 9 | Fraud detection | ✅ Done |
-| 10 | Shared infrastructure (errors, paging, dev seed data, CORS, HTTPS, DB TLS) | 🔄 Implemented, verification pending |
-| 11–12 | Frontend, quality gate | ⬜ Not started |
+| 10 | Shared infrastructure (errors, paging, dev seed data, CORS, HTTPS, DB TLS) | ✅ Done |
+| 11 | Frontend (React 19, auth, layout, all six module pages, dashboard) | ✅ Done (automated tests) |
+| 12 | Testing and quality gate | 🔄 In progress |
+
+### Verified results (25 Nov 2026)
+
+| Check | Result |
+|-------|--------|
+| Backend unit tests | 520/520 passed |
+| Backend integration tests (MySQL 8 Testcontainers) | 168/168 passed |
+| Service line coverage (JaCoCo) | 87.2 % overall; 13/13 target services ≥ 80 % (dev-only seed services excluded) |
+| Frontend | TypeScript 0 errors · ESLint 0 errors, 0 warnings · Vitest 400/400 · production build OK |
+| Production JAR | Builds; refuses to start with missing or unsafe `prod` settings, naming each problem without printing values |
+
+Not yet verified: manual browser and end-to-end checks, cross-user and auth smoke tests on a running app,
+WCAG 2.1 AA audit, and deployment.
 
 Investments, AI insights and reporting are post-MVP.
