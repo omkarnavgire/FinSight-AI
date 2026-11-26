@@ -1,80 +1,82 @@
 /**
- * Central Axios instance for all API calls.
+ * Central Axios instance for all API calls (T-64).
  *
- * Rules (coding standards):
- * - Access token kept in memory only — never in localStorage.
- * - 401 responses trigger a single refresh call; concurrent 401s are
- *   gated by a module-level refreshPromise (single-flight pattern, AC-SF-1/2/3).
- * - All API calls in the application must use this instance, never raw fetch.
+ * Rules (coding standards, architecture):
+ * - All API calls go through `apiClient`; never call `fetch` in a component.
+ * - The access token is attached from memory (`auth-token.ts`); it is never persisted.
+ * - The refresh token is an HttpOnly cookie that only the browser sends; JS never sees it.
+ *
+ * 401 handling (single-flight, AC-SF-1 to AC-SF-3):
+ * 1. A 401 from `/auth/login`, `/auth/register` or `/auth/refresh` is returned as-is.
+ *    (Wrong credentials are not an expired session.)
+ * 2. If another call already replaced the token after this request was sent, the request is
+ *    retried with the current token, without a new refresh.
+ * 3. Otherwise all concurrent 401s share one `refreshAccessToken()`; on success each request
+ *    is retried once with the new token.
+ * 4. If the refresh fails, every waiting request rejects with its original error and the
+ *    session-expired handler runs once (routes to `/login`).
  */
-import axios, { type AxiosInstance, type InternalAxiosRequestConfig, type AxiosError } from 'axios'
+import axios, { type InternalAxiosRequestConfig } from 'axios'
+import { createApiInstance } from './api-instance'
+import { getAccessToken } from './auth-token'
+import { notifySessionExpired } from './auth-events'
+import { refreshAccessToken } from './refresh'
 
-export const API_BASE_URL = '/api/v1'
+export { API_BASE_URL } from './api-instance'
 
-/** In-memory access token — never persisted to localStorage. */
-let accessToken: string | null = null
-
-/** Single-flight gate: prevents duplicate refresh calls on concurrent 401s. */
-let refreshPromise: Promise<string> | null = null
-
-export function setAccessToken(token: string): void {
-  accessToken = token
+interface RetryableRequestConfig extends InternalAxiosRequestConfig {
+  /** Set once the request has been retried after a 401. */
+  _retry?: boolean
+  /** The access token this request was sent with (`null` = none). */
+  _sentToken?: string | null
 }
 
-export function clearAccessToken(): void {
-  accessToken = null
-}
+/** Endpoints whose 401 means "bad credentials or cookie", not "expired access token". */
+const NO_REFRESH_PATH = /^\/?auth\/(?:login|register|refresh)(?:[?#]|$)/
 
-export const apiClient: AxiosInstance = axios.create({
-  baseURL: API_BASE_URL,
-  withCredentials: true, // sends the HttpOnly refresh-token cookie
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+/** Refresh promises whose failure has already been reported, so it is reported once. */
+const reportedFailures = new WeakSet<Promise<string>>()
 
-// --- Request interceptor: attach bearer token ---
-apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (accessToken) {
-    config.headers.Authorization = `Bearer ${accessToken}`
+export const apiClient = createApiInstance()
+
+apiClient.interceptors.request.use((config: RetryableRequestConfig) => {
+  const token = getAccessToken()
+  config._sentToken = token
+  if (token === null) {
+    config.headers.delete('Authorization')
+  } else {
+    config.headers.set('Authorization', `Bearer ${token}`)
   }
   return config
 })
 
-// --- Response interceptor: single-flight 401 refresh ---
 apiClient.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
+  async (error: unknown) => {
+    if (!axios.isAxiosError(error) || error.config === undefined) {
+      throw error
+    }
+    const config: RetryableRequestConfig = error.config
+    if (error.response?.status !== 401 || config._retry === true || NO_REFRESH_PATH.test(config.url ?? '')) {
+      throw error
+    }
+    config._retry = true
 
-    if (error.response?.status !== 401 || originalRequest._retry) {
-      return Promise.reject(error)
+    const current = getAccessToken()
+    if (current !== null && current !== config._sentToken) {
+      return apiClient(config)
     }
 
-    originalRequest._retry = true
-
+    const pending = refreshAccessToken()
     try {
-      // Gate: if a refresh is already in flight, join it rather than firing again.
-      if (!refreshPromise) {
-        refreshPromise = apiClient
-          .post<{ accessToken: string }>('/auth/refresh')
-          .then((res) => {
-            setAccessToken(res.data.accessToken)
-            return res.data.accessToken
-          })
-          .finally(() => {
-            refreshPromise = null
-          })
-      }
-
-      const newToken = await refreshPromise
-      originalRequest.headers.Authorization = `Bearer ${newToken}`
-      return apiClient(originalRequest)
+      await pending
     } catch {
-      clearAccessToken()
-      refreshPromise = null
-      window.location.href = '/login'
-      return Promise.reject(error)
+      if (!reportedFailures.has(pending)) {
+        reportedFailures.add(pending)
+        notifySessionExpired()
+      }
+      throw error
     }
+    return apiClient(config)
   },
 )
