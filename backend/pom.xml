@@ -27,6 +27,9 @@
         <lombok.version>1.18.46</lombok.version>
         <testcontainers.version>1.20.4</testcontainers.version>
         <archunit.version>1.3.2</archunit.version>
+        <jacoco.version>0.8.14</jacoco.version>
+        <!-- Empty default so @{argLine} in Surefire resolves even if the JaCoCo agent is skipped. -->
+        <argLine></argLine>
     </properties>
 
     <dependencies>
@@ -201,8 +204,26 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>--enable-preview</argLine>
+                    <!-- @{argLine} keeps the JaCoCo agent set by jacoco:prepare-agent (late property evaluation). -->
+                    <argLine>@{argLine} --enable-preview</argLine>
                 </configuration>
+            </plugin>
+
+            <!-- T-74: test coverage. The agent attaches to every test run; the HTML/CSV report is made
+                 on demand with `mvnw test jacoco:report` (target/site/jacoco). 0.8.14 is the first
+                 release with official Java 25 support. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
