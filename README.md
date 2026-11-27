@@ -110,7 +110,7 @@ No real personal financial information is stored or required.
 | 9 | Fraud detection | ✅ Done |
 | 10 | Shared infrastructure (errors, paging, dev seed data, CORS, HTTPS, DB TLS) | ✅ Done |
 | 11 | Frontend (React 19, auth, layout, all six module pages, dashboard) | ✅ Done (automated tests) |
-| 12 | Testing and quality gate | 🔄 In progress |
+| 12 | Testing and quality gate | ✅ Done |
 
 ### Verified results (25 Nov 2026)
 
