@@ -14,7 +14,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        // Dev only. Override when 8080 is taken, e.g. FINSIGHT_API_TARGET=http://localhost:8081
+        target: process.env.FINSIGHT_API_TARGET ?? 'http://localhost:8080',
         changeOrigin: true,
       },
     },

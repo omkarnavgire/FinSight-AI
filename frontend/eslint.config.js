@@ -25,6 +25,26 @@ export default tseslint.config(
       ],
       // Enforce coding standards: no any
       '@typescript-eslint/no-explicit-any': 'error',
+      // D-7: auth tokens live in memory only; no Web Storage anywhere in the app.
+      'no-restricted-globals': [
+        'error',
+        { name: 'localStorage', message: 'Web Storage is not allowed (D-7). Keep tokens in memory.' },
+        { name: 'sessionStorage', message: 'Web Storage is not allowed (D-7). Keep tokens in memory.' },
+      ],
+      'no-restricted-properties': [
+        'error',
+        ...['window', 'globalThis', 'self'].flatMap((object) => [
+          { object, property: 'localStorage', message: 'Web Storage is not allowed (D-7). Keep tokens in memory.' },
+          { object, property: 'sessionStorage', message: 'Web Storage is not allowed (D-7). Keep tokens in memory.' },
+        ]),
+      ],
+    },
+  },
+  {
+    // Test files and helpers never run under the dev server's fast refresh.
+    files: ['src/test/**', '**/*.test.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 )
